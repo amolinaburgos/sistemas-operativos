@@ -1,0 +1,8 @@
+# 1. Preparar los archivos para el commit
+git add .
+
+# 2. Guardar el estado con un mensaje descriptivo
+git commit -m "Agregados los archivos de la práctica 1"
+
+# 3. Subir los cambios a internet (HOST)
+git push origin main
