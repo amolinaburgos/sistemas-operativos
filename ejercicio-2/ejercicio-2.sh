@@ -9,20 +9,64 @@
 
 #!/usr/bin/env bash
 
-declare -r -i MAX=3
+declare -r -i MAX_PRODUCTO=20
 declare -A inventario
 declare -r ARCHIVO_PERSISTENCIA="productos.tsv"
 declare -r ARCHIVO_USUARIOS="usuarios.tsv"
 
-declare -r -i OPCION_ALTA=1
-declare -r -i OPCION_BAJA=2
-declare -r -i OPCION_MOSTRAR=3
-declare -r -i OPCION_REPORTE=4
-declare -r -i OPCION_SALIR=5
+declare -r -i OPCION_ALTA_PRODUCTO=1
+declare -r -i OPCION_BAJA_PRODUCTO=2
+declare -r -i OPCION_MOSTRAR_PRODUCTO=3
+declare -r -i OPCION_EDITAR_PRODUCTO=4
+declare -r -i OPCION_REPORTE_PRODUCTO=5
+declare -r -i OPCION_SALIR=6
 
 bienvenida() {
     printf "Bienvenido/a al sistema\n\n"
 }
+
+# Valida las credenciales ingresadas contra usuarios.tsv
+autenticar() {
+    if [[ ! -f "$ARCHIVO_USUARIOS" ]]; then
+        printf "\nError: No hay usuarios registrados. Por favor registre un usuario primero.\n"
+        return 1
+    fi
+
+    declare -i intentos=0
+    declare usuario=""
+    declare clave=""
+
+    printf "\n--- INICIO DE SESIÓN ---\n"
+    while (( intentos < 3 )); do
+        read -rp "Usuario: " usuario
+        read -sp "Contraseña: " clave
+        printf "\n"
+
+        declare hash_ingresado
+        hash_ingresado=$(generar_hash "$clave")
+
+        declare usr hash_guardado
+        declare -i autenticado=0
+
+        while IFS=$'\t' read -r usr hash_guardado; do
+            if [[ "$usr" == "$usuario" && "$hash_guardado" == "$hash_ingresado" ]]; then
+                autenticado=1
+                break
+            fi
+        done < "$ARCHIVO_USUARIOS" #buscar -z sp rp
+
+        if (( autenticado == 1 )); then
+            printf "Acceso concedido. Bienvenido/a, %s.\n" "$usuario"
+            return 0
+        fi
+
+        intentos=$((intentos + 1))
+        printf "Usuario o contraseña incorrectos (%d/3 intentos).\n" "$intentos"
+    done
+
+    return 1
+}
+
 
 # Genera el hash SHA-256 de una cadena empleando sha256sum y extrayendo la subcadena
 generar_hash() {
@@ -85,59 +129,17 @@ registrar_usuario() {
     printf "Usuario '%s' registrado con exito.\n" "$usuario"
 }
 
-# Valida las credenciales ingresadas contra usuarios.tsv
-autenticar() {
-    if [[ ! -f "$ARCHIVO_USUARIOS" ]]; then
-        printf "\nError: No hay usuarios registrados. Por favor registre un usuario primero.\n"
-        return 1
-    fi
 
-    declare -i intentos=0
-    declare usuario=""
-    declare clave=""
-
-    printf "\n--- INICIO DE SESIÓN ---\n"
-    while (( intentos < 3 )); do
-        read -rp "Usuario: " usuario
-        read -sp "Contraseña: " clave
-        printf "\n"
-
-        declare hash_ingresado
-        hash_ingresado=$(generar_hash "$clave")
-
-        declare usr hash_guardado
-        declare -i autenticado=0
-
-        while IFS=$'\t' read -r usr hash_guardado; do
-            if [[ "$usr" == "$usuario" && "$hash_guardado" == "$hash_ingresado" ]]; then
-                autenticado=1
-                break
-            fi
-        done < "$ARCHIVO_USUARIOS" #buscar -z sp rp
-
-        if (( autenticado == 1 )); then
-            printf "Acceso concedido. Bienvenido/a, %s.\n" "$usuario"
-            return 0
-        fi
-
-        intentos=$((intentos + 1))
-        printf "Usuario o contraseña incorrectos (%d/3 intentos).\n" "$intentos"
-    done
-
-    return 1
-}
 
 # Menú de entrada previo al acceso al sistema de productos
 menu_acceso() {
     declare opcion=0
 
     while true; do
-        printf "\n--- ACCESO AL SISTEMA ---\n"
-        printf "1. Iniciar sesion\n"
-        printf "2. Registrar usuario\n"
-        printf "3. Mostrar\n"
-	printf "4. Reporte\n"
-	printf "5. Salir\n"
+    printf "\n--- ACCESO AL SISTEMA ---\n"
+    printf "1. Iniciar sesion\n"
+    printf "2. Registrar usuario\n"
+	printf "3. Salir\n"
         read -rp "Opcion: " opcion
 
         case $opcion in
@@ -149,13 +151,7 @@ menu_acceso() {
             2)
                 registrar_usuario
                 ;;
-	    3)
-		mostrar
-                ;;
-            4)
-                reporte
-                ;;
-            5)
+	        3)
                 printf "\nSaliendo del programa...\n"
                 exit 0
                 ;;
@@ -175,7 +171,7 @@ cargar_desde_tsv() {
     declare id nombre precio activo
 
     while IFS=$'\t' read -r id nombre precio activo; do
-        if [[ -n "$id" && "$id" =~ ^[0-9]+$ ]] && (( id >= 0 && id < MAX )); then
+        if [[ -n "$id" && "$id" =~ ^[0-9]+$ ]] && (( id >= 0 && id < MAX_PRODUCTO )); then
             inventario[$id,nombre]="$nombre"
             inventario[$id,precio]="$precio"
             inventario[$id,activo]="$activo"
@@ -187,7 +183,7 @@ guardar_en_tsv() {
     declare -i i=0
 
     {
-        for ((i=0; i<MAX; i++)); do
+        for ((i=0; i<MAX_PRODUCTO; i++)); do
             if [[ ${inventario[$i,activo]} -eq 1 ]]; then
                 printf "%d\t%s\t%.2f\t%d\n" "$i" "${inventario[$i,nombre]}" "${inventario[$i,precio]}" "${inventario[$i,activo]}"
             fi
@@ -199,7 +195,7 @@ existe_nombre() {
     declare nombre_buscar="$1"
     declare -i i=0
 
-    for ((i=0; i<MAX; i++)); do
+    for ((i=0; i<MAX_PRODUCTO; i++)); do
         if [[ ${inventario[$i,activo]} -eq 1 ]]; then
             if [[ "${inventario[$i,nombre],,}" == "${nombre_buscar,,}" ]]; then
                 return 0
@@ -213,7 +209,7 @@ alta() {
     declare -i id=$1
     declare -n prod_ref=$2
 
-    if (( id < 0 || id >= MAX )); then
+    if (( id < 0 || id >= MAX_PRODUCTO )); then
         printf "Error: ID fuera de rango.\n"
         return
     fi
@@ -240,7 +236,7 @@ alta() {
 baja() {
     declare -i id=$1
 
-    if (( id < 0 || id >= MAX )); then
+    if (( id < 0 || id >= MAX_PRODUCTO )); then
         printf "Error: ID fuera de rango.\n"
         return
     fi
@@ -256,6 +252,34 @@ baja() {
     else
         printf "El producto no existe.\n"
     fi
+}
+
+editar() {
+    declare -i id=$1
+    declare -n prod_ref=$2
+
+    if (( id < 0 || id >= MAX_PRODUCTO )); then
+        printf "Error: ID fuera de rango.\n"
+        return
+    fi
+
+    # Validación adicional: no se puede editar un producto que no existe
+    if [[ ${inventario[$id,activo]} -eq 0 ]]; then
+        printf "Error: El producto no existe o está dado de baja.\n"
+        return
+    fi
+
+    if [[ "${inventario[$id,nombre],,}" != "${prod_ref[nombre],,}" ]]; then
+        if existe_nombre "${prod_ref[nombre]}"; then
+            printf "Error: Ya existe otro producto activo registrado con el nombre '%s'.\n" "${prod_ref[nombre]}"
+            return
+        fi
+    fi
+
+    inventario[$id,nombre]=${prod_ref[nombre]}
+    inventario[$id,precio]=${prod_ref[precio]}
+    guardar_en_tsv
+    printf "Producto %d actualizado con nuevo precio $%.2f.\n" "$id" "${prod_ref[precio]}"
 }
 
 reporte() {
@@ -289,7 +313,7 @@ reporte() {
         <tbody>
 EOF
 
-        for ((i=0; i<MAX; i++)); do
+        for ((i=0; i<MAX_PRODUCTO; i++)); do
             if [[ ${inventario[$i,activo]} -eq 1 ]]; then
                 printf "            <tr>\n"
                 printf "                <td>%d</td>\n" "$i"
@@ -314,7 +338,7 @@ mostrar() {
     declare -i i=0
 
     printf "\nLISTADO:\n"
-    for ((i=0; i<MAX; i++)); do
+    for ((i=0; i<MAX_PRODUCTO; i++)); do
         if [[ ${inventario[$i,activo]} -eq 1 ]]; then
             printf "ID %d : %s - $%.2f\n" "$i" "${inventario[$i,nombre]}" "${inventario[$i,precio]}"
         fi
@@ -325,7 +349,7 @@ main() {
     declare -i i=0
 
     # Inicialización de la estructura en memoria
-    for ((i=0; i<MAX; i++)); do
+    for ((i=0; i<MAX_PRODUCTO; i++)); do
         inventario[$i,activo]=0
         inventario[$i,precio]=0
         inventario[$i,nombre]=""
@@ -344,29 +368,36 @@ main() {
     # Menú principal de gestión de inventario
     while [[ "$opcion" != "$OPCION_SALIR" ]]; do
         printf "\nACCIONES:\n"
-        printf "1. Alta producto (ID 0 a %d)\n" $((MAX - 1))
+        printf "1. Alta producto (ID 0 a %d)\n" $((MAX_PRODUCTO - 1))
         printf "2. Baja producto\n"
         printf "3. Mostrar inventario\n"
-        printf "4. Generar reporte HTML\n"
-        printf "5. Salir\n"
+	printf "4. Editar Producto\n"
+        printf "5. Generar reporte HTML\n"
+        printf "6. Salir\n"
         read -rp "Opcion: " opcion
 
         case $opcion in
-            $OPCION_ALTA)
-                read -rp "Ingrese ID (0-$((MAX - 1))): " id
+            $OPCION_ALTA_PRODUCTO)
+                read -rp "Ingrese ID (0-$((MAX_PRODUCTO - 1))): " id
                 read -rp "Ingrese Nombre: " p_temp[nombre]
                 read -rp "Ingrese Precio: " p_temp[precio]
                 p_temp[activo]=1
                 alta "$id" p_temp
                 ;;
-            $OPCION_BAJA)
-                read -rp "Ingrese ID a eliminar (0-$((MAX - 1))): " id
+            $OPCION_BAJA_PRODUCTO)
+                read -rp "Ingrese ID a eliminar (0-$((MAX_PRODUCTO - 1))): " id
                 baja "$id"
                 ;;
-            $OPCION_MOSTRAR)
+            $OPCION_MOSTRAR_PRODUCTO)
                 mostrar
                 ;;
-            $OPCION_REPORTE)
+            $OPCION_EDITAR_PRODUCTO)
+                read -rp "Ingrese ID a editar (0-$((MAX_PRODUCTO - 1))): " id
+                read -rp "Ingrese nuevo Nombre: " p_temp[nombre]
+                read -rp "Ingrese nuevo Precio: " p_temp[precio]
+                editar "$id" p_temp
+                ;;
+            $OPCION_REPORTE_PRODUCTO)
                 reporte
                 ;;
             $OPCION_SALIR)
@@ -387,25 +418,15 @@ main
 
 
 # Para implementar el sistema de autenticación dinámico con persistencia y encriptación SHA-256 en usuarios.tsv, se incorporan los siguientes componentes:
-
 #     Generación de Hash con sha256sum: La función generar_hash utiliza la sintaxis $(...) para capturar la salida de sha256sum y extrae los primeros 64 caracteres de la representación hexadecimal mediante la subcadena ${salida:0:64}.
-
 #     Registro de Usuarios (registrar_usuario): Solicita credenciales, verifica mediante existe_usuario que el nombre de usuario no esté registrado y guarda la tupla usuario\thash en usuarios.tsv.
-
 #     Autenticación (autenticar): Lee línea por línea el archivo usuarios.tsv con IFS=$'\t' y compara el hash de la contraseña ingresada contra el hash almacenado.
-
 #     Menú de Acceso Inicial (menu_acceso): Se presenta al iniciar el script permitiendo elegir entre iniciar sesión, registrar usuario o salir.
 
-
-
-
 # Detalles claves de la solución
-
 #     Obtención del hash SHA-256:
 #     El comando sha256sum devuelve una línea con el hash seguido del separador de entrada (p. ej. hash  -). La función generar_hash captura esta salida en salida y aplica ${salida:0:64} para tomar únicamente los 64 caracteres hexadecimales del digest SHA-256.
-
 #     Ocultación de clave en terminal:
 #     Se utiliza read -sp durante la captura de contraseña para evitar que los caracteres ingresados se muestren en la consola.
-
 #     Manejo de flujo con menu_acceso:
 #     Separa el proceso de acceso de la lógica de inventario. Si no existen usuarios registrados en usuarios.tsv, el intento de inicio de sesión informa el error y devuelve al menú para permitir el registro de un primer usuario.
