@@ -19,11 +19,11 @@ declare -r SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 declare -r SCHEMA_FILE="${SCRIPT_DIR}/esquema.sql" # Ruta opcional hacia un esquema SQL externo
 
 # Definición de constantes numéricas para las opciones del menú principal
-declare -r -i OPCION_ALTA=1
-declare -r -i OPCION_BAJA=2
-declare -r -i OPCION_MOSTRAR=3
-declare -r -i OPCION_EDITAR=4
-declare -r -i OPCION_REPORTE=5
+declare -r -i OPCION_ALTA_PRODUCTO=1
+declare -r -i OPCION_BAJA_PRODUCTO=2
+declare -r -i OPCION_MOSTRAR_PRODUCTO=3
+declare -r -i OPCION_EDITAR_PRODUCTO=4
+declare -r -i OPCION_REPORTE_PRODUCTO=5
 declare -r -i OPCION_SALIR=6
 
 # Variables de estado mutables para el seguimiento de la sesión actual del usuario
@@ -720,7 +720,7 @@ main() {
         read -rp 'Opción: ' opcion || break
 
         case "$opcion" in
-            $OPCION_ALTA)
+            $OPCION_ALTA_PRODUCTO)
                 registrar_log "Alta de producto" || return 1
                 read -rp "Ingrese ID (0-$((MAX - 1))): " id_ingresado || return 1
                 read -rp 'Ingrese Nombre: ' nombre || return 1
@@ -737,7 +737,7 @@ main() {
                 fi
                 alta "$id" "$nombre" "$centavos"
                 ;;
-            $OPCION_BAJA)
+            $OPCION_BAJA_PRODUCTO)
                 registrar_log "Baja de producto" || return 1
                 read -rp "Ingrese ID a eliminar (0-$((MAX - 1))): " id_ingresado || return 1
                 if ! id=$(normalizar_id "$id_ingresado"); then
@@ -747,11 +747,11 @@ main() {
                 fi
                 baja "$id"
                 ;;
-            $OPCION_MOSTRAR)
+            $OPCION_MOSTRAR_PRODUCTO)
                 registrar_log "Mostrar inventario" || return 1
                 mostrar
                 ;;
-            $OPCION_EDITAR)
+            $OPCION_EDITAR_PRODUCTO)
                 registrar_log "Edición de producto" || return 1
                 read -rp "Ingrese ID a editar (0-$((MAX - 1))): " id_ingresado || return 1
                 read -rp 'Ingrese nuevo Nombre: ' nombre || return 1
@@ -768,7 +768,7 @@ main() {
                 fi
                 editar "$id" "$nombre" "$centavos"
                 ;;
-            $OPCION_REPORTE)
+            $OPCION_REPORTE_PRODUCTO)
                 registrar_log "Generar reporte HTML" || return 1
                 reporte
                 ;;
