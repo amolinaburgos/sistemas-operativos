@@ -104,12 +104,15 @@ importar_tsv_legacy() {
             if [[ -f "$ARCHIVO_PRODUCTOS_TSV" ]]; then
                 while IFS= read -r linea || [[ -n "$linea" ]]; do
                     [[ -n "$linea" ]] || continue
+                    
                     [[ "$linea" == *$'\t'* ]] || continue
                     id="${linea%%$'\t'*}"
                     resto="${linea#*$'\t'}"
+                    
                     [[ "$resto" == *$'\t'* ]] || continue
                     nombre="${resto%%$'\t'*}"
                     resto="${resto#*$'\t'}"
+                    
                     [[ "$resto" == *$'\t'* ]] || continue
                     precio="${resto%%$'\t'*}"
                     activo="${resto#*$'\t'}"
