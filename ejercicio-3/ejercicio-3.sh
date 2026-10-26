@@ -1,91 +1,145 @@
 #!/usr/bin/env bash
 
-# Reimplementación de ejercicio-2.sh. Los usuarios y productos ya no se cargan
-# ni se guardan en usuarios.tsv/productos.tsv: cada consulta y modificación va
-# a SQLite. Los únicos TSV que permanecen son los logs requeridos.
+# Configuración del intérprete Bash para prevenir errores silenciosos
+set -u          # Trata variables no definidas como error (evita fallos por tipeo)
+set -o pipefail # Asegura que si falla un comando en una tubería (pipe), falle todo el conjunto
 
-set -u
-set -o pipefail
+# Declaración de constantes globales de control y rutas de archivos
+declare -r -i MAX=20                        
+declare -r DB="data.sq3"                      
+declare -r SYSTEM_LOG="system.log"            
+declare -r ERROR_LOG="error.log"              
+declare -r ARCHIVO_USUARIOS_TSV="usuarios.tsv"          
+declare -r ARCHIVO_PRODUCTOS_TSV="productos.tsv"        
+declare -r ARCHIVO_USUARIOS_CARGADOS="usuarios_cargados.tsv"
+declare -r ARCHIVO_PRODUCTOS_CARGADOS="productos_cargados.tsv"
 
-declare -r -i MAX=6
-declare -r DB="data.sq3"
-declare -r SYSTEM_LOG="system.log"
-declare -r ERROR_LOG="error.log"
+# Obtención robusta de la ruta absoluta del directorio del script actual
 declare -r SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-declare -r SCHEMA_FILE="${SCRIPT_DIR}/esquema.sql"
+declare -r SCHEMA_FILE="${SCRIPT_DIR}/esquema.sql" # Ruta opcional hacia un esquema SQL externo
 
+# Definición de constantes numéricas para las opciones del menú principal
 declare -r -i OPCION_ALTA=1
 declare -r -i OPCION_BAJA=2
 declare -r -i OPCION_MOSTRAR=3
-declare -r -i OPCION_REPORTE=4
-declare -r -i OPCION_SALIR=5
+declare -r -i OPCION_EDITAR=4
+declare -r -i OPCION_REPORTE=5
+declare -r -i OPCION_SALIR=6
 
+# Variables de estado mutables para el seguimiento de la sesión actual del usuario
 declare ID_USUARIO="-"
 declare USUARIO_ACTUAL="-"
 
+
+# ==============================================================================
+# MÓDULO DE REGISTRO Y AUDITORÍA (LOGS)
+# ==============================================================================
+
+# Función: registrar_error
+# Propósito: Captura y almacena mensajes de error con marca de tiempo en formato TSV.
 registrar_error() {
     local mensaje="$1"
     local fecha
-    mensaje=$(limpiar_campo_tsv "$mensaje")
-    fecha=$(date '+%Y-%m-%d %H:%M:%S') || fecha="fecha-desconocida"
+    
+    mensaje=$(limpiar_campo_tsv "$mensaje") # Sanitiza el texto para evitar romper columnas TSV
+    fecha=$(date '+%Y-%m-%d %H:%M:%S') || fecha="fecha-desconocida" # Obtiene timestamp seguro
+
+    # Anexa el registro de error al archivo correspondiente
     if ! printf '%s\t%s\n' "$fecha" "$mensaje" >> "$ERROR_LOG"; then
         printf 'No se pudo escribir en %s: %s\n' "$ERROR_LOG" "$mensaje" >&2
     fi
 }
 
+# Configuración de trampa global (trap): Atrapa cualquier error inesperado en tiempo de ejecución
 trap 'registrar_error "Fallo inesperado en la línea ${BASH_LINENO[0]}."' ERR
 
-# El escape de comillas simples es necesario porque la CLI sqlite3 no ofrece
-# parámetros enlazados al invocarla como proceso desde Bash.
+
+# ==============================================================================
+# MÓDULO DE INTERACCIÓN Y SEGURIDAD CON SQLITE
+# ==============================================================================
+
+# Función: sql_texto
+# Propósito: Sanitiza cadenas de texto reemplazando comillas simples para evitar inyección SQL.
 sql_texto() {
     local texto="$1"
-    texto=${texto//\'/\'\'}
+    texto=${texto//\'/\'\'} # Escapa las comillas simples duplicándolas (' -> '')
     printf "'%s'" "$texto"
 }
 
+# Función: ejecutar_sql
+# Propósito: Envuelve la ejecución de comandos `sqlite3` controlando salidas y errores.
 ejecutar_sql() {
     local sentencia="$1"
     local salida estado
 
+    # Ejecuta SQLite en modo batch, sin cabeceras, usando tabuladores como separadores
     if salida=$(sqlite3 -batch -bail -noheader -separator $'\t' "$DB" "$sentencia" 2>&1); then
         printf '%s' "$salida"
         return 0
     else
         estado=$?
-        registrar_error "SQLite: ${salida//$'\n'/ }"
+        registrar_error "SQLite: ${salida//$'\n'/ }" # Registra el error devuelto por la base de datos
         printf 'Error al acceder a la base de datos. Consulte %s.\n' "$ERROR_LOG" >&2
         return "$estado"
     fi
 }
 
+
+# ==============================================================================
+# MÓDULO DE INICIALIZACIÓN Y MIGRACIÓN DE DATOS (LEGACY TSV)
+# ==============================================================================
+
+# Función: inicializar_base_datos
+# Propósito: Comprueba dependencias, crea la estructura de la base de datos y ejecuta la migración TSV.
 inicializar_base_datos() {
     local salida estado
 
+    # Valida que la herramienta sqlite3 esté instalada en el sistema
     if ! command -v sqlite3 >/dev/null 2>&1; then
         registrar_error "No se encontró el ejecutable sqlite3."
         printf 'Error: se requiere sqlite3 instalado y disponible en PATH.\n' >&2
         return 1
     fi
 
-    # La ruta de la base sigue siendo relativa al directorio de trabajo, como
-    # solicita el ejercicio; el esquema se resuelve junto a este script.
+    # Notifica si la base de datos es nueva
     if [[ ! -f "$DB" ]]; then
         printf 'La base %s no existe; se creará en el directorio actual.\n' "$DB"
     fi
 
-    # El esquema usa CREATE TABLE IF NOT EXISTS, así que también puede aplicarse
-    # al iniciar si la base ya existe, sin borrar los datos persistidos.
-    if salida=$(sqlite3 -batch -bail "$DB" < "$SCHEMA_FILE" 2>&1); then
-        importar_tsv_legacy || return 1
-        return 0
-    else
-        estado=$?
-        registrar_error "No se pudo inicializar ${DB}: ${salida//$'\n'/ }"
-        printf 'Error al inicializar la base de datos. Consulte %s.\n' "$ERROR_LOG" >&2
-        return "$estado"
+    # Se ejecutan siempre los comandos para garantizar que todas las tablas existan
+    sqlite3 "$DB" <<EOF
+CREATE TABLE IF NOT EXISTS usuarios (
+    id_usuario INTEGER PRIMARY KEY AUTOINCREMENT,
+    nombre_usuario TEXT UNIQUE NOT NULL,
+    hash_contrasena TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS productos (
+    id_producto INTEGER PRIMARY KEY,
+    nombre TEXT UNIQUE NOT NULL,
+    precio_centavos INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS migraciones (
+    nombre TEXT PRIMARY KEY,
+    aplicada_en TEXT NOT NULL
+);
+EOF
+
+    # Si existe un archivo de esquema externo adicional, se aplica
+    if [[ -f "$SCHEMA_FILE" ]]; then
+        if ! sqlite3 -batch -bail "$DB" < "$SCHEMA_FILE" 2>&1; then
+            registrar_error "No se pudo aplicar el archivo de esquema externo."
+        fi
     fi
+
+    # Llama a la función encargada de migrar los archivos TSV antiguos
+    importar_tsv_legacy || return 1
+    return 0
 }
 
+# Función: limpiar_campo_tsv
+# Propósito: Elimina caracteres de control (tabuladores, saltos de línea) para proteger la estructura TSV.
 limpiar_campo_tsv() {
     local valor="$1"
     valor=${valor//$'\t'/ }
@@ -94,11 +148,14 @@ limpiar_campo_tsv() {
     printf '%s' "$valor"
 }
 
+# Función: importar_tsv_legacy
+# Propósito: Lee los archivos .tsv antiguos, los inserta en SQLite de forma atómica y los renombra.
 importar_tsv_legacy() {
     local aplicada salida estado linea usuario hash nombre_sql hash_sql
-    local id resto nombre precio activo id_normalizado centavos precio_sql
+    local id resto nombre precio activo id_normalizado centavos
     local tiene_archivos=0
 
+    # Verifica si la migración ya fue aplicada previamente consultando la tabla de control
     if ! aplicada=$(sqlite3 -batch -noheader "$DB" \
         "SELECT 1 FROM migraciones WHERE nombre = 'importacion_tsv_v1' LIMIT 1;" 2>&1); then
         registrar_error "No se pudo consultar el estado de importación TSV: ${aplicada//$'\n'/ }"
@@ -107,54 +164,43 @@ importar_tsv_legacy() {
     fi
     [[ "$aplicada" == "1" ]] && return 0
 
-    [[ -f usuarios.tsv || -f productos.tsv ]] && tiene_archivos=1
+    # Detecta si existen los archivos legacy en el directorio
+    [[ -f "$ARCHIVO_USUARIOS_TSV" || -f "$ARCHIVO_PRODUCTOS_TSV" ]] && tiene_archivos=1
 
-    # La migración y su marca se confirman en la misma transacción: si SQLite
-    # falla, se revierte la carga y el siguiente inicio puede reintentarla.
+    # Ejecuta la inserción masiva dentro de una transacción atómica de SQLite (BEGIN IMMEDIATE)
     if salida=$(
         {
             printf 'BEGIN IMMEDIATE;\n'
 
-            if [[ -f usuarios.tsv ]]; then
+            # Migración de usuarios desde usuarios.tsv
+            if [[ -f "$ARCHIVO_USUARIOS_TSV" ]]; then
                 while IFS= read -r linea || [[ -n "$linea" ]]; do
                     [[ -n "$linea" ]] || continue
-                    if [[ "$linea" != *$'\t'* ]]; then
-                        registrar_error "Importación TSV: fila de usuario sin separador de tabulación."
-                        continue
-                    fi
+                    if [[ "$linea" != *$'\t'* ]]; then continue; fi
                     usuario="${linea%%$'\t'*}"
                     hash="${linea#*$'\t'}"
                     hash="${hash%$'\r'}"
                     if [[ "$usuario" == *$'\t'* || -z "$usuario" || ! "$hash" =~ ^[[:xdigit:]]{64}$ ]]; then
-                        registrar_error "Importación TSV: fila de usuario inválida; se omitió."
                         continue
                     fi
                     nombre_sql=$(sql_texto "$usuario")
                     hash_sql=$(sql_texto "$hash")
                     printf 'INSERT OR IGNORE INTO usuarios (nombre_usuario, hash_contrasena) VALUES (%s, %s);\n' \
                         "$nombre_sql" "$hash_sql"
-                done < usuarios.tsv
+                done < "$ARCHIVO_USUARIOS_TSV"
             fi
 
-            if [[ -f productos.tsv ]]; then
+            # Migración de productos desde productos.tsv
+            if [[ -f "$ARCHIVO_PRODUCTOS_TSV" ]]; then
                 while IFS= read -r linea || [[ -n "$linea" ]]; do
                     [[ -n "$linea" ]] || continue
-                    if [[ "$linea" != *$'\t'* ]]; then
-                        registrar_error "Importación TSV: fila de producto sin columnas TSV válidas."
-                        continue
-                    fi
+                    if [[ "$linea" != *$'\t'* ]]; then continue; fi
                     id="${linea%%$'\t'*}"
                     resto="${linea#*$'\t'}"
-                    if [[ "$resto" != *$'\t'* ]]; then
-                        registrar_error "Importación TSV: fila de producto incompleta; se omitió."
-                        continue
-                    fi
+                    if [[ "$resto" != *$'\t'* ]]; then continue; fi
                     nombre="${resto%%$'\t'*}"
                     resto="${resto#*$'\t'}"
-                    if [[ "$resto" != *$'\t'* ]]; then
-                        registrar_error "Importación TSV: fila de producto incompleta; se omitió."
-                        continue
-                    fi
+                    if [[ "$resto" != *$'\t'* ]]; then continue; fi
                     precio="${resto%%$'\t'*}"
                     activo="${resto#*$'\t'}"
                     activo="${activo%$'\r'}"
@@ -162,25 +208,27 @@ importar_tsv_legacy() {
                         ! id_normalizado=$(normalizar_id "$id") ||
                         (( id_normalizado < 0 || id_normalizado >= MAX )) ||
                         ! validar_nombre_producto "$nombre"; then
-                        registrar_error "Importación TSV: fila de producto inválida o inactiva; se omitió."
                         continue
                     fi
                     if ! centavos=$(convertir_precio_centavos "$precio"); then
-                        registrar_error "Importación TSV: precio de producto inválido; se omitió."
                         continue
                     fi
                     nombre_sql=$(sql_texto "$nombre")
                     printf 'INSERT OR IGNORE INTO productos (id_producto, nombre, precio_centavos) VALUES (%d, %s, %d);\n' \
                         "$id_normalizado" "$nombre_sql" "$centavos"
-                done < productos.tsv
+                done < "$ARCHIVO_PRODUCTOS_TSV"
             fi
 
+            # Registra que la migración se completó con éxito
             printf "INSERT INTO migraciones (nombre, aplicada_en) VALUES ('importacion_tsv_v1', datetime('now'));\n"
             printf 'COMMIT;\n'
         } | sqlite3 -batch -bail "$DB" 2>&1
     ); then
         if (( tiene_archivos == 1 )); then
-            printf 'Importación de usuarios.tsv y productos.tsv completada.\n'
+            # Renombra los archivos originales para evitar reprocesarlos en futuras ejecuciones
+            [[ -f "$ARCHIVO_USUARIOS_TSV" ]] && mv "$ARCHIVO_USUARIOS_TSV" "$ARCHIVO_USUARIOS_CARGADOS"
+            [[ -f "$ARCHIVO_PRODUCTOS_TSV" ]] && mv "$ARCHIVO_PRODUCTOS_TSV" "$ARCHIVO_PRODUCTOS_CARGADOS"
+            printf 'Importación de archivos TSV legacy completada y archivos renombrados.\n'
         fi
         return 0
     else
@@ -191,7 +239,9 @@ importar_tsv_legacy() {
     fi
 }
 
-registrar_accion() {
+# Función: registrar_log
+# Propósito: Guarda un registro de auditoría en `system.log` detallando la acción realizada por el usuario.
+registrar_log() {
     local accion="$1"
     local id nombre fecha
 
@@ -214,15 +264,24 @@ bienvenida() {
     printf 'Bienvenido/a al sistema\n\n'
 }
 
+
+# ==============================================================================
+# MÓDULO DE AUTENTICACIÓN Y GESTIÓN DE USUARIOS
+# ==============================================================================
+
+# Función: generar_hash
+# Propósito: Aplica cifrado SHA-256 a una cadena de texto (contraseñas).
 generar_hash() {
     local salida
     salida=$(printf '%s' "$1" | sha256sum) || {
         registrar_error "No se pudo calcular el hash de una contraseña."
         return 1
     }
-    printf '%s' "${salida:0:64}"
+    printf '%s' "${salida:0:64}" # Extrae exactamente los primeros 64 caracteres del hash hexadecimal
 }
 
+# Función: existe_usuario
+# Propósito: Consulta en SQLite si un nombre de usuario ya se encuentra registrado.
 existe_usuario() {
     local nombre_sql resultado
     nombre_sql=$(sql_texto "$1")
@@ -232,6 +291,8 @@ existe_usuario() {
     [[ "$resultado" == "1" ]]
 }
 
+# Función: autenticar
+# Propósito: Valida las credenciales de acceso del usuario permitiendo hasta 3 intentos.
 autenticar() {
     local intentos=0 usuario clave hash nombre_sql resultado id_guardado hash_guardado
 
@@ -251,7 +312,6 @@ autenticar() {
             return 1
         fi
 
-        # Se registra cada intento sin incluir nunca la contraseña ingresada.
         id_guardado="-"
         hash_guardado=""
         if [[ -n "$resultado" ]]; then
@@ -259,7 +319,7 @@ autenticar() {
         fi
         ID_USUARIO="$id_guardado"
         USUARIO_ACTUAL="$usuario"
-        if ! registrar_accion "Inicio de sesión"; then
+        if ! registrar_log "Inicio de sesión"; then
             return 1
         fi
 
@@ -268,7 +328,7 @@ autenticar() {
             USUARIO_ACTUAL="-"
             return 1
         fi
-        clave=""
+        clave="" # Limpia la contraseña en memoria por seguridad
 
         if [[ -n "$hash_guardado" && "$hash_guardado" == "$hash" ]]; then
             ID_USUARIO="$id_guardado"
@@ -287,6 +347,8 @@ autenticar() {
     return 1
 }
 
+# Función: registrar_usuario
+# Propósito: Da de alta un nuevo usuario aplicando hash a su contraseña y guardándolo en SQLite.
 registrar_usuario() {
     local usuario clave hash nombre_sql hash_sql
 
@@ -294,7 +356,7 @@ registrar_usuario() {
     read -rp 'Ingrese nombre de usuario: ' usuario || return 1
     ID_USUARIO="-"
     USUARIO_ACTUAL="$usuario"
-    if ! registrar_accion "Registro de usuario"; then
+    if ! registrar_log "Registro de usuario"; then
         return 1
     fi
 
@@ -310,9 +372,7 @@ registrar_usuario() {
         return 1
     else
         local estado=$?
-        if (( estado == 2 )); then
-            return 1
-        fi
+        if (( estado == 2 )); then return 1; fi
     fi
 
     read -rsp 'Ingrese contraseña: ' clave || return 1
@@ -338,11 +398,18 @@ registrar_usuario() {
     USUARIO_ACTUAL="-"
 }
 
+
+# ==============================================================================
+# MÓDULO DE GESTIÓN DE PRODUCTOS E INVENTARIO
+# ==============================================================================
+
 validar_nombre_producto() {
     local nombre="$1"
     [[ -n "$nombre" && "$nombre" != *$'\t'* && "$nombre" != *$'\n'* && "$nombre" != *$'\r'* && "$nombre" =~ [^[:space:]] ]]
 }
 
+# Función: convertir_precio_centavos
+# Propósito: Convierte montos decimales (ej. 10.50) a enteros (1050) para evitar errores de punto flotante en dinero.
 convertir_precio_centavos() {
     local precio="$1" parte_entera parte_decimal
 
@@ -387,6 +454,8 @@ existe_producto_id() {
     [[ "$resultado" == "1" ]]
 }
 
+# Función: alta
+# Propósito: Inserta un nuevo producto validando restricciones de ID único, rango y nombre.
 alta() {
     local id="$1" nombre="$2" cents="$3" nombre_sql
 
@@ -407,9 +476,7 @@ alta() {
         return 1
     else
         local estado=$?
-        if (( estado == 2 )); then
-            return 1
-        fi
+        if (( estado == 2 )); then return 1; fi
     fi
 
     if existe_nombre "$nombre"; then
@@ -418,16 +485,12 @@ alta() {
         return 1
     else
         local estado=$?
-        if (( estado == 2 )); then
-            return 1
-        fi
+        if (( estado == 2 )); then return 1; fi
     fi
 
     nombre_sql=$(sql_texto "$nombre")
     if ! ejecutar_sql \
         "INSERT INTO productos (id_producto, nombre, precio_centavos) VALUES (${id}, ${nombre_sql}, ${cents});" >/dev/null; then
-        # La clave primaria y UNIQUE de esquema.sql sustituyen las búsquedas
-        # sobre el inventario en memoria y el reescrito completo de productos.tsv.
         return 1
     fi
 
@@ -435,6 +498,8 @@ alta() {
         "$id" "$nombre" "$((cents / 100))" "$((cents % 100))"
 }
 
+# Función: baja
+# Propósito: Elimina físicamente un producto de la base de datos a partir de su ID.
 baja() {
     local id="$1" resultado
 
@@ -453,10 +518,51 @@ baja() {
         return 1
     fi
 
-    # En el original la baja quitaba el producto al volver a guardar el TSV;
-    # ahora se elimina directamente la fila SQL, liberando el ID.
     ejecutar_sql "DELETE FROM productos WHERE id_producto = ${id};" >/dev/null || return 1
     printf 'Producto %d eliminado.\n' "$id"
+}
+
+# Función: editar
+# Propósito: Actualiza los datos de un producto existente (nombre y/o precio) en SQLite.
+editar() {
+    local id="$1" nombre="$2" cents="$3" nombre_sql resultado id_existente
+
+    if (( id < 0 || id >= MAX )); then
+        printf 'Error: ID fuera de rango.\n'
+        registrar_error "Edición rechazada: ID fuera de rango."
+        return 1
+    fi
+    if ! validar_nombre_producto "$nombre"; then
+        printf 'Error: el nombre no puede estar vacío ni contener tabuladores o saltos de línea.\n'
+        registrar_error "Edición rechazada: nombre de producto vacío o con caracteres de control."
+        return 1
+    fi
+
+    if ! resultado=$(ejecutar_sql "SELECT 1 FROM productos WHERE id_producto = ${id} LIMIT 1;"); then
+        return 1
+    fi
+    if [[ "$resultado" != "1" ]]; then
+        printf 'Error: el producto no existe o está dado de baja.\n'
+        registrar_error "Edición rechazada: el producto no existe en el ID ${id}."
+        return 1
+    fi
+
+    if id_existente=$(ejecutar_sql "SELECT id_producto FROM productos WHERE nombre = $(sql_texto "$nombre") AND id_producto != ${id} LIMIT 1;"); then
+        if [[ -n "$id_existente" ]]; then
+            printf "Error: ya existe otro producto con el nombre '%s'.\n" "$nombre"
+            registrar_error "Edición rechazada: nombre de producto duplicado."
+            return 1
+        fi
+    fi
+
+    nombre_sql=$(sql_texto "$nombre")
+    if ! ejecutar_sql "UPDATE productos SET nombre = ${nombre_sql}, precio_centavos = ${cents} WHERE id_producto = ${id};" >/dev/null; then
+        return 1
+    fi
+
+    printf "Producto %d actualizado: '%s' con precio $%d.%02d.\n" \
+        "$id" "$nombre" "$((cents / 100))" "$((cents % 100))"
+    registrar_log "Edición de producto ID $id"
 }
 
 obtener_productos() {
@@ -468,6 +574,8 @@ formatear_precio() {
     printf '%d.%02d' "$((centavos / 100))" "$((centavos % 100))"
 }
 
+# Función: mostrar
+# Propósito: Imprime en consola el listado completo de productos ordenados por ID.
 mostrar() {
     local filas id nombre centavos
     if ! filas=$(obtener_productos); then
@@ -499,6 +607,8 @@ escapar_html() {
     printf '%s' "$resultado"
 }
 
+# Función: reporte
+# Propósito: Genera un archivo de reporte en formato HTML (`productos.html`) sanitizando texto.
 reporte() {
     local archivo="productos.html" filas id nombre centavos nombre_html
     if ! filas=$(obtener_productos); then
@@ -548,16 +658,22 @@ HTML
     printf "\nReporte generado exitosamente en '%s'.\n" "$archivo"
 }
 
+
+# ==============================================================================
+# MÓDULOS DE MENÚS Y FLUJO PRINCIPAL
+# ==============================================================================
+
+# Función: menu_acceso
+# Propósito: Muestra el menú de autenticación previo antes de permitir acceder al inventario.
 menu_acceso() {
+    clear
     local opcion
 
     while true; do
         printf '\n--- ACCESO AL SISTEMA ---\n'
         printf '1. Iniciar sesión\n'
         printf '2. Registrar usuario\n'
-        printf '3. Mostrar\n'
-        printf '4. Reporte\n'
-        printf '5. Salir\n'
+        printf '3. Salir\n'
         read -rp 'Opción: ' opcion || return 1
 
         case "$opcion" in
@@ -571,46 +687,41 @@ menu_acceso() {
                 ID_USUARIO="-"
                 USUARIO_ACTUAL="-"
                 ;;
-            3)
-                registrar_accion "Mostrar inventario (acceso)" || return 1
-                mostrar
-                ;;
-            4)
-                registrar_accion "Generar reporte HTML (acceso)" || return 1
-                reporte
-                ;;
-            5)
-                registrar_accion "Salir" || return 1
+            3)  registrar_log "Salir" || return 1
                 printf '\nSaliendo del programa...\n'
                 exit 0
                 ;;
             *)
-                registrar_accion "Opción inválida: ${opcion}" || return 1
+                registrar_log "Opción inválida: ${opcion}" || return 1
                 printf '\nOpción inválida.\n'
                 ;;
         esac
     done
 }
 
+# Función: main
+# Propósito: Orquesta la ejecución inicial, despliega el menú interactivo principal de operaciones.
 main() {
     local opcion id_ingresado id nombre precio centavos
 
-    inicializar_base_datos || return 1
-    bienvenida
-    menu_acceso || return 1
+    inicializar_base_datos || return 1 # Inicializa DB y migra archivos legacy
+    bienvenida                         # Mensaje de bienvenida
+    menu_acceso || return 1            # Control de sesión de usuario
 
+    # Bucle infinito del menú de gestión de inventario post-autenticación
     while true; do
         printf '\nACCIONES:\n'
         printf '1. Alta producto (ID 0 a %d)\n' "$((MAX - 1))"
         printf '2. Baja producto\n'
         printf '3. Mostrar inventario\n'
-        printf '4. Generar reporte HTML\n'
-        printf '5. Salir\n'
+        printf '4. Editar producto\n'
+        printf '5. Generar reporte HTML\n'
+        printf '6. Salir\n'
         read -rp 'Opción: ' opcion || break
 
         case "$opcion" in
-            1)
-                registrar_accion "Alta de producto" || return 1
+            $OPCION_ALTA)
+                registrar_log "Alta de producto" || return 1
                 read -rp "Ingrese ID (0-$((MAX - 1))): " id_ingresado || return 1
                 read -rp 'Ingrese Nombre: ' nombre || return 1
                 read -rp 'Ingrese Precio: ' precio || return 1
@@ -626,8 +737,8 @@ main() {
                 fi
                 alta "$id" "$nombre" "$centavos"
                 ;;
-            2)
-                registrar_accion "Baja de producto" || return 1
+            $OPCION_BAJA)
+                registrar_log "Baja de producto" || return 1
                 read -rp "Ingrese ID a eliminar (0-$((MAX - 1))): " id_ingresado || return 1
                 if ! id=$(normalizar_id "$id_ingresado"); then
                     printf 'Error: ID inválido.\n'
@@ -636,25 +747,43 @@ main() {
                 fi
                 baja "$id"
                 ;;
-            3)
-                registrar_accion "Mostrar inventario" || return 1
+            $OPCION_MOSTRAR)
+                registrar_log "Mostrar inventario" || return 1
                 mostrar
                 ;;
-            4)
-                registrar_accion "Generar reporte HTML" || return 1
+            $OPCION_EDITAR)
+                registrar_log "Edición de producto" || return 1
+                read -rp "Ingrese ID a editar (0-$((MAX - 1))): " id_ingresado || return 1
+                read -rp 'Ingrese nuevo Nombre: ' nombre || return 1
+                read -rp 'Ingrese nuevo Precio: ' precio || return 1
+                if ! id=$(normalizar_id "$id_ingresado"); then
+                    printf 'Error: ID inválido.\n'
+                    registrar_error "Edición rechazada: formato de ID inválido."
+                    continue
+                fi
+                if ! centavos=$(convertir_precio_centavos "$precio"); then
+                    printf 'Error: ingrese un precio no negativo con hasta dos decimales.\n'
+                    registrar_error "Edición rechazada: precio inválido."
+                    continue
+                fi
+                editar "$id" "$nombre" "$centavos"
+                ;;
+            $OPCION_REPORTE)
+                registrar_log "Generar reporte HTML" || return 1
                 reporte
                 ;;
-            5)
-                registrar_accion "Salir" || return 1
+            $OPCION_SALIR)
+                registrar_log "Salir" || return 1
                 printf '\nSaliendo del programa...\n'
                 return 0
                 ;;
             *)
-                registrar_accion "Opción inválida: ${opcion}" || return 1
+                registrar_log "Opción inválida: ${opcion}" || return 1
                 printf '\nOpción inválida.\n'
                 ;;
         esac
     done
 }
 
+# Ejecución de la función principal pasando los argumentos de línea de comandos
 main "$@"
