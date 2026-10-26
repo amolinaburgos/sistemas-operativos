@@ -1,2 +1,2 @@
-# sistemas-operativos
+# Sistemas-Operativos
 Repositorio de trabajo de la materia Sistemas Operativos (ISFT151 - 2026)
