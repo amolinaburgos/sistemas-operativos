@@ -1,0 +1,15 @@
+Proyecto:
+
+    Bash Hybrid WebRPC Server
+
+(Work in progress)
+
+-Este proyecto pretende ilustrar didácticamente cómo implementar un servidor web básico doméstico mediante el enfoque de trabajo RPC (Remote Procedure Call) basado en el formato de serialización JSON. La combinación de ambas técnicas corresponde al estándar JSON/RPC 2.0. Por otro lado, el servidor es de caracter híbrido. Es decir, que también puede trabajar con peticiones HTTP estándar pero únicamente restringidas al contexto de un servidor estático de archivos.
+
+Las decisiones de diseño son extremadamente simples. Cualquier petición GET al servidor se considera siempre una solicitud de un archivo disponible en el directorio "static" (ajustable por configuración) y toda petición POST se asume que cumple la especificación JSON/RPC 2.0.
+
+De esta forma el servidor web se mantiene mínimo y limitado pura y exclusivamente a proveer la ejecución de funciones registrables a través de la función rpc_load_registry().
+
+Este repositorio no tiene como finalidad "hostear" un proyecto con actualizaciones vía commits para mantener actualizada las funcionalidades y/o evolución. La finalidad es didáctica/pedagógica y se busca intencionalmente mostrar la evolución archivada de la refactorización desde una versión inicial llamada "plain-version" en adelante.
+
+Si bien existen las metodologías de branch para gestionar este tipo de cuestiones, escapa al propósito de la materia que es proveer un repositorio básico de código directamente descargable para el trabajo en la materia de Sistemas Operativos.
