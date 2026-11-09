@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <title>Panel de Testeo - Servidor Web / JSON-RPC</title>
+    <style>
+        /* Ajuste para ocupar exactamente el alto del viewport */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            margin-bottom: 10px;
+        }
+
+        h1 {
+            margin: 0 0 5px 0;
+            font-size: 1.5em;
+        }
+
+        .main-layout {
+            display: flex;
+            flex: 1;
+            gap: 15px;
+            min-height: 0; /* Permite el scroll interno */
+        }
+
+        /* Sidebar izquierdo */
+        .sidebar {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            width: 230px;
+            min-width: 230px;
+            overflow-y: auto;
+        }
+
+        .sidebar button {
+            padding: 6px 10px;
+            cursor: pointer;
+            text-align: left;
+        }
+
+        /* Contenedor de las dos columnas de respuesta */
+        .panels-container {
+            display: flex;
+            flex: 1;
+            gap: 15px;
+            min-height: 0;
+        }
+
+        /* Paneles de columnas verticales */
+        .column-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #777;
+            padding: 10px;
+            min-height: 0;
+            box-sizing: border-box;
+        }
+
+        .column-panel h3 {
+            margin: 0 0 10px 0;
+            font-size: 1.1em;
+        }
+
+        .output-box {
+            flex: 1;
+            overflow: auto;
+            border: 1px dashed #aaa;
+            padding: 8px;
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        /* Ajuste de renderización para imágenes */
+        .preview-image {
+            max-width: 100%;
+            max-height: 80%;
+            height: auto;
+            display: block;
+            margin: 10px auto 0 auto;
+            border: 1px solid #ccc;
+        }
+
+        footer {
+            margin-top: 10px;
+            border-top: 1px solid #aaa;
+            padding-top: 6px;
+            font-size: 0.85em;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>Panel de Testeo de Servidor Híbrido (Bash)</h1>
+    </header>
+
+    <div class="main-layout">
+        <!-- Sidebar de botones -->
+        <aside class="sidebar">
+            <strong>Recursos HTTP (GET)</strong>
+            <button onclick="HTTPFileRequest('/index.html')">GET /index.html</button>
+            <button onclick="HTTPFileRequest('/favicon.ico')">GET /favicon.ico</button>
+            <button onclick="HTTPFileRequest('/inexistente.html')">GET /inexistente.html (404)</button>
+            <button onclick="promptFileRequest()">GET Personalizado...</button>
+
+            <strong style="margin-top: 15px;">Métodos JSON-RPC (POST)</strong>
+            <button onclick="JSONRPCServerRequest('saludar')">RPC: saludar()</button>
+            <button onclick="JSONRPCServerRequest('metodo_desconocido')">RPC: metodo_desconocido()</button>
+            <button onclick="promptRpcRequest()">RPC Personalizado...</button>
+        </aside>
+
+        <!-- Dos columnas verticales paralelas -->
+        <main class="panels-container">
+            <section class="column-panel">
+                <h3>Respuesta JSON-RPC (Crudo)</h3>
+                <div id="json-output" class="output-box">Esperando petición JSON-RPC...</div>
+            </section>
+
+            <section class="column-panel">
+                <h3>Vista de Archivo / Contenido HTTP</h3>
+                <div id="file-output" class="output-box">Esperando petición de archivo...</div>
+            </section>
+        </main>
+    </div>
+
+    <footer>
+        <p>Materia "Sistemas Operativos" - Servidor Web (Bash) version: 1.0<br>
+        Prof. Matías Gastón Santiago - ISFT Nº 151</p>
+    </footer>
+
+    <script>
+        let rpcCounter = 1;
+
+        /**
+         * Petición JSON-RPC 2.0 (POST)
+         */
+        async function JSONRPCServerRequest(method, args = null) {
+            const container = document.getElementById('json-output');
+            container.textContent = 'Enviando petición JSON-RPC...';
+
+            const payload = {
+                jsonrpc: "2.0",
+                method: method,
+                id: rpcCounter++
+            };
+
+            if (args !== null) {
+                payload.params = args;
+            }
+
+            try {
+                const response = await fetch('/', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+                container.textContent = JSON.stringify(data, null, 2);
+            } catch (err) {
+                container.textContent = 'Error RPC: ' + err.message;
+            }
+        }
+
+        /**
+         * Petición HTTP GET de archivos
+         */
+        async function HTTPFileRequest(path) {
+            const container = document.getElementById('file-output');
+            container.textContent = 'Solicitando archivo...';
+
+            try {
+                const response = await fetch(path, { method: 'GET' });
+                const contentType = response.headers.get('Content-Type') || '';
+
+                const metaText = `[HTTP Status: ${response.status} ${response.statusText}]\n[Content-Type: ${contentType}]\n\n`;
+
+                // Renderización de imagen si el tipo MIME o la extensión corresponde
+                if (response.ok && (contentType.includes('image/') || path.match(/\.(ico|png|jpg|jpeg|gif|webp|svg)$/i))) {
+                    const blob = await response.blob();
+                    const imgUrl = URL.createObjectURL(blob);
+                    
+                    container.innerHTML = '';
+                    
+                    const metaPre = document.createElement('pre');
+                    metaPre.style.margin = '0';
+                    metaPre.textContent = metaText + '(Renderizado de imagen):';
+
+                    const img = document.createElement('img');
+                    img.src = imgUrl;
+                    img.alt = path;
+                    img.className = 'preview-image';
+
+                    container.appendChild(metaPre);
+                    container.appendChild(img);
+                } else {
+                    const text = await response.text();
+                    container.textContent = metaText + text;
+                }
+            } catch (err) {
+                container.textContent = 'Error HTTP File: ' + err.message;
+            }
+        }
+
+        /**
+         * Solicitud interactiva de ruta de recurso
+         */
+        function promptFileRequest() {
+            const path = prompt("Ingrese la ruta del recurso a solicitar (ej: /index.html, /favicon.ico):", "/");
+            if (path && path.trim() !== "") {
+                HTTPFileRequest(path.trim());
+            }
+        }
+
+        /**
+         * Solicitud interactiva de método y parámetros RPC
+         */
+        function promptRpcRequest() {
+            const method = prompt("Ingrese el nombre del método RPC a ejecutar (ej: login):", "");
+            if (method && method.trim() !== "") {
+                const paramsInput = prompt("Ingrese los parámetros en formato JSON (opcional, cancelar para omitir):", "");
+                let params = null;
+
+                if (paramsInput && paramsInput.trim() !== "") {
+                    try {
+                        params = JSON.parse(paramsInput);
+                    } catch (e) {
+                        alert("Los parámetros ingresados no son un formato JSON válido.");
+                        return;
+                    }
+                }
+
+                JSONRPCServerRequest(method.trim(), params);
+            }
+        }
+    </script>
+</body>
+</html>
